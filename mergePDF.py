@@ -1,51 +1,185 @@
-form PyPDF4 import PdfFileMerger
-import os, argparse
+import sys
+from PyQt5.QtWidgets import (QApplication, QWidget, QLabel, QLineEdit,
+    QPushButton, QListWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QDialog, QFileDialog, QMessageBox, QAbstractItemView)
+from PyQt5.QtCore import Qt, QUrl, QSize
+from PyQt5.QtGui import QIcon
+from PyPDF4 import PdfFileMerger
 
-def merge_pdfs(input_files: list, page_range: tuple, output_file: str, bookmark: bool = True):
-    """
-    Merge a list of PDF files and save the combined result into the `output_file`.
-    `page_range` to select a range of pages (behaving like Python's range() function) from the input files
-        e.g (0,2) -> First 2 pages
-        e.g (0,6,2) -> pages 1,3,5
-    bookmark -> add bookmarks to the output file to navigate directly to the input file section within the output file.
-    """
-    # strict = False -> To ignore PdfReadError - Illegal Character error
-    merger = PdfFileMerger(strict=False)
-    for input_file in input_files:
-        bookmark_name = os.path.splitext(os.path.basename(input_file))[0] if bookmark else None
-        # pages To control which pages are appended from a particular file.
-        merger.append(fileobj=open(input_file, 'rb'), pages=page_range, import_bookmarks=False, bookmark=bookmark_name)
-    # Insert the pdf at specific page
-    merger.write(fileobj=open(output_file, 'wb'))
-    merger.close()
 
-def parse_args():
-    """Get user command line parameters"""
-    parser = argparse.ArgumentParser(description="Available Options")
-    parser.add_argument('-i', '--input_files', dest='input_files', nargs='*',
-                        type=str, required=True, help="Enter the path of the files to process")
-    parser.add_argument('-p', '--page_range', dest='page_range', nargs='*',
-                        help="Enter the pages to consider e.g.: (0,2) -> First 2 pages")
-    parser.add_argument('-o', '--output_file', dest='output_file',
-                        required=True, type=str, help="Enter a valid output file")
-    parser.add_argument('-b', '--bookmark', dest='bookmark', default=True, type=lambda x: (
-        str(x).lower() in ['true', '1', 'yes']), help="Bookmark resulting file")
-    # To Porse The Command Line Arguments
-    args = vars(parser.parse_args())
-    # To Display The Command Line Arguments
-    print("## Command Arguments #################################################")
-    print("\n".join("{}:{}".format(i, j) for i, j in args.items()))
-    print("######################################################################")
-    return args
+class ListWidget(QListWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent=None)
+        self.setAcceptDrops(True)
+        self.setStyleSheet('''font-size:25px''')
+        self.setDragDropMode(QAbstractItemView.InternalMove)
+        self.setSelectionMode(QAbstractItemView.ExtendedSelection)
 
-if __name__ == "__main__":
-    # Parsing command line arguments entered by user
-    args = parse_args()
-    page_range = None
-    if args['page_range']:
-        page_range = tuple(int(x) for x in args['page_range'][0].split(','))
-    # call the main function
-    merge_pdfs(
-        input_files=args['input_files'], page_range=page_range,
-        output_file=args['output_file'], bookmark=args['bookmark']
-    )
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.accept()
+        else: return super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.setDropAction(Qt.CopyAction)
+            event.accept()
+        else: return super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.setDropAction(Qt.CopyAction)
+            event.accept()
+            pdfFiles = []
+            for url in event.mimeData().urls():
+                if url.isLocalFile():
+                    if url.toString().endswith('.pdf'):
+                        pdfFiles.append(str(url.toLocalFile()))
+            self.addItems(pdfFiles)
+        else: return super().dropEvent(event)
+
+
+class OutputField(QLineEdit):
+    def __init__(self):
+        super().__init__()
+        self.height = 45
+        self.setStyleSheet('''font-size: 20px;''')
+        self.setFixedHeight(self.height)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls:
+            event.accept()
+        else: event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls:
+            event.setDropAction(Qt.CopyAction)
+            event.accept()
+        else: event.ignore()
+
+    def dropEvent(self, event):
+        if event.mimeData().hasUrls:
+            event.setDropAction(Qt.CopyAction)
+            event.accept()
+            if event.mimeData().urls():
+                self.setText(event.mimeData().urls()[0].toLocalFile())
+        else: event.ignore()
+
+
+class Button(QPushButton):
+    def __init__(self, label_text):
+        super().__init__()
+        self.setText(label_text)
+        self.setStyleSheet('''
+            font-size: 20px;
+            width: 180px;
+            height: 50;
+        ''')
+
+
+class AppDemo(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle('Слияние PDF-файлов')
+        self.setWindowIcon(QIcon('pdf.png'))
+        self.initUI()
+
+    def initUI(self):
+        self.outputFile = OutputField()
+
+        self.buttonBrowseOutputFile = Button('&Save To')
+        self.buttonBrowseOutputFile.clicked.connect(self.populateFileName)
+        self.buttonBrowseOutputFile.setFixedHeight(self.outputFile.height)
+
+        outputFolderRow = QHBoxLayout()
+        outputFolderRow.addWidget(self.outputFile)
+        outputFolderRow.addWidget(self.buttonBrowseOutputFile)
+
+        self.pdfListWidget = ListWidget(self)
+
+        # Buttons
+        buttonLayout = QHBoxLayout()
+        self.buttonDeleteSelect = Button('&Delete')
+        self.buttonDeleteSelect.clicked.connect(self.deleteSelected)
+        buttonLayout.addWidget(self.buttonDeleteSelect, 1, Qt.AlignRight)
+        self.buttonMerge = Button('&Merge')
+        self.buttonMerge.setIcon(QIcon('play_button.jpg'))
+        self.buttonMerge.setIconSize(QSize(30, 30))
+        self.buttonMerge.clicked.connect(self.mergeFile)
+        buttonLayout.addWidget(self.buttonMerge)
+        self.buttonClose = Button('&Exit')
+        self.buttonClose.clicked.connect(QApplication.quit)
+        buttonLayout.addWidget(self.buttonClose)
+        self.buttonReset = Button('&Reset')
+        self.buttonReset.clicked.connect(self.clearQueue)
+        buttonLayout.addWidget(self.buttonReset)
+
+        mainLayout = QVBoxLayout()
+        mainLayout.addLayout(outputFolderRow)
+        mainLayout.addWidget(self.pdfListWidget)
+        mainLayout.addLayout(buttonLayout)
+        self.setLayout(mainLayout)
+
+    def deleteSelected(self):
+        items = self.pdfListWidget.selectedItems()
+        if items:
+            for item in items:
+                self.pdfListWidget.takeItem(self.pdfListWidget.row(item))
+        else:
+            self.dialogMessage(
+                '''<h2 style="color: red;">Нечего удалять.<br> Выберите файл/ы для удаления!</h2>'''
+            )
+
+    def clearQueue(self):
+        self.pdfListWidget.clear()
+        self.outputFile.setText('')
+
+    def populateFileName(self):
+        path = self._getSaveFilePath()
+        if path:
+            self.outputFile.setText(path)
+
+    def dialogMessage(self, message):
+        dlg = QMessageBox(self)
+        dlg.setWindowTitle('PDF Manager')
+        dlg.setIcon(QMessageBox.Information)
+        dlg.setText(message)
+        dlg.show()
+
+    def _getSaveFilePath(self):
+        file_save_path, _ = QFileDialog.getSaveFileName(
+            self, 'Save PDF file', '.', 'PDF file (*.pdf)'
+        )
+        return file_save_path
+
+    def mergeFile(self):
+        if not self.outputFile.text():
+            # надо выбрать outputFile!
+            self.populateFileName()
+            return
+
+        if self.pdfListWidget.count() > 0:
+            pdfMerger = PdfFileMerger()
+            try:
+                for i in range(self.pdfListWidget.count()):
+                    pdfMerger.append(self.pdfListWidget.item(i).text())
+                pdfMerger.write(self.outputFile.text())
+                pdfMerger.close()
+                self.pdfListWidget.clear()
+                self.dialogMessage('<h2 style="color: green;">Слияние PDF завершено!</h2>')
+            except Exception as e:
+                self.dialogMessage(f'Error: {e}')
+        else:
+            self.dialogMessage(
+                '''<h2 style="color: red;">Нечего объединять.<br> Добавьте файлы для слияни!</h2>'''
+            )
+
+
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+    app.setStyle("fusion")
+    app.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    demo = AppDemo()
+    demo.resize(600, 400)
+    demo.show()
+    sys.exit(app.exec_())
